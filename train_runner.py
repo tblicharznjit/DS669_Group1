@@ -8,7 +8,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 epochs = 5  # adjust for longer training
 
 # ====== Load Real Patient Data ======
-with open('患者总数据.pkl', 'rb') as f:
+with open('requiredFile.pkl', 'rb') as f:
     MIMICtable = pickle.load(f)
 
 X = MIMICtable['X']

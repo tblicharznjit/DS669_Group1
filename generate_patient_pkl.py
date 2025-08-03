@@ -1,24 +1,25 @@
 import pandas as pd
 import numpy as np
 import pickle
-from tqdm import tqdm
+from databasePath import path
 
 # =============== CONFIG ===============
-data_path = "C:/Users/BeastfrmHell/Desktop/mimic-iii-clinical-database-1.4"
+data_path = path
 
-output_file = "患者总数据.pkl"
+#output_file = "患者总数据.pkl"
+output_file = "requiredFile.pkl"
 
 # =============== LOAD DATA ===============
 print("Loading CSVs...")
 adm = pd.read_csv(f"{data_path}/ADMISSIONS.csv")
 icu = pd.read_csv(f"{data_path}/ICUSTAYS.csv")
 patients = pd.read_csv(f"{data_path}/PATIENTS.csv")
-chartevents = pd.read_csv(f"{data_path}/CHARTEVENTS.csv", nrows=1000000)  # limit for testing
+chartevents = pd.read_csv(f"{data_path}/CHARTEVENTS.csv", nrows=1000000)  
 print(chartevents['ITEMID'].unique())
 
 
-labevents = pd.read_csv(f"{data_path}/LABEVENTS.csv", nrows=500000)  # limit for testing
-inputevents = pd.read_csv(f"{data_path}/INPUTEVENTS_MV.csv", nrows=500000)
+labevents = pd.read_csv(f"{data_path}/LABEVENTS.csv")  
+inputevents = pd.read_csv(f"{data_path}/INPUTEVENTS_MV.csv")
 
 # =============== EXTRACT FEATURES ===============
 print("Processing features...")
@@ -75,8 +76,8 @@ MIMICtable = {
 }
 
 # =============== SAVE ===============
-with open(output_file, 'wb') as f:
-    pickle.dump(MIMICtable, f)
+#with open(output_file, 'wb') as f:
+#    pickle.dump(MIMICtable, f)
 
-print(f"✅ Saved {output_file} with {n_samples} samples ready for WD3QNE training.")
+#print(f"✅ Saved {output_file} with {n_samples} samples ready for WD3QNE training.")
 
