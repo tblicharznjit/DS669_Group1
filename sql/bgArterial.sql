@@ -1040,5 +1040,149 @@ ADD COLUMN magnesium_imputed_flag TINYINT(1) DEFAULT 0;
 UPDATE bloodGasArterial_4bin_agg 
 SET magnesium_imputed_flag = CASE WHEN magnesium_avg IS NULL THEN 1 ELSE 0 END;
 
-
 SELECT AVG(magnesium_imputed) FROM `bloodGasArterial_4bin_agg`;
+
+
+-- SGPT (ALT - Alanine Aminotransferase)
+-- Item ID: 50861, Normal range: 7-56 U/L
+
+-- SGOT (AST - Aspartate Aminotransferase)
+-- Item ID: 50878, Normal range: 10-40 U/L
+
+
+ALTER TABLE bloodGasArterial_4bin_agg 
+ADD COLUMN sgpt_alt_min DECIMAL(6,1),
+ADD COLUMN sgpt_alt_max DECIMAL(6,1),
+ADD COLUMN sgpt_alt_avg DECIMAL(6,1),
+ADD COLUMN sgpt_alt_imputed DECIMAL(6,1),
+ADD COLUMN sgot_ast_min DECIMAL(6,1),
+ADD COLUMN sgot_ast_max DECIMAL(6,1),
+ADD COLUMN sgot_ast_avg DECIMAL(6,1),
+ADD COLUMN sgot_ast_imputed DECIMAL(6,1);
+
+-- Update with SGPT (ALT) data 
+UPDATE bloodGasArterial_4bin_agg bg
+SET 
+    sgpt_alt_min = (
+        SELECT MIN(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50861 -- SGPT/ALT
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0
+        AND le.valuenum < 150  -- Filter extreme outliers
+    ),
+    sgpt_alt_max = (
+        SELECT MAX(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50861
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0
+        AND le.valuenum < 150
+    ),
+    sgpt_alt_avg = (
+        SELECT AVG(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50861
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0
+        AND le.valuenum < 150
+    );
+
+-- Update with SGOT (AST) data 
+UPDATE bloodGasArterial_4bin_agg bg
+SET 
+    sgot_ast_min = (
+        SELECT MIN(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50878  -- SGOT/AST
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0
+        AND le.valuenum < 150
+    ),
+    sgot_ast_max = (
+        SELECT MAX(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50878
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0
+        AND le.valuenum < 150
+    ),
+    sgot_ast_avg = (
+        SELECT AVG(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50878
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0
+        AND le.valuenum < 150
+    );
+
+-- Hierarchical imputation for SGPT (ALT)
+UPDATE bloodGasArterial_4bin_agg bg
+LEFT JOIN (
+    SELECT 
+        subject_id, hadm_id, icustay_id,
+        AVG(sgpt_alt_avg) AS patient_sgpt_mean
+    FROM bloodGasArterial_4bin_agg
+    WHERE sgpt_alt_avg IS NOT NULL
+    GROUP BY subject_id, hadm_id, icustay_id
+) ps ON bg.subject_id = ps.subject_id AND bg.hadm_id = ps.hadm_id AND bg.icustay_id = ps.icustay_id
+CROSS JOIN (
+    SELECT AVG(sgpt_alt_avg) AS pop_sgpt_mean
+    FROM bloodGasArterial_4bin_agg
+    WHERE sgpt_alt_avg IS NOT NULL
+) pop
+SET bg.sgpt_alt_imputed = COALESCE(
+    bg.sgpt_alt_avg,                    -- Original value
+    ps.patient_sgpt_mean,               -- Patient mean
+    pop.pop_sgpt_mean,                  -- Population mean
+    31                                  -- Clinical normal (from your paper: SGPT 31 ± 21.5)
+);
+
+-- Hierarchical imputation for SGOT (AST)
+UPDATE bloodGasArterial_4bin_agg bg
+LEFT JOIN (
+    SELECT 
+        subject_id, hadm_id, icustay_id,
+        AVG(sgot_ast_avg) AS patient_sgot_mean
+    FROM bloodGasArterial_4bin_agg
+    WHERE sgot_ast_avg IS NOT NULL
+    GROUP BY subject_id, hadm_id, icustay_id
+) ps ON bg.subject_id = ps.subject_id AND bg.hadm_id = ps.hadm_id AND bg.icustay_id = ps.icustay_id
+CROSS JOIN (
+    SELECT AVG(sgot_ast_avg) AS pop_sgot_mean
+    FROM bloodGasArterial_4bin_agg
+    WHERE sgot_ast_avg IS NOT NULL
+) pop
+SET bg.sgot_ast_imputed = COALESCE(
+    bg.sgot_ast_avg,                    -- Original value
+    ps.patient_sgot_mean,               -- Patient mean
+    pop.pop_sgot_mean,                  -- Population mean
+    38                                  -- Clinical normal (from your paper: SGOT 38.2 ± 12.6)
+);
+
+SELECT AVG(sgot_ast_imputed), AVG(sgpt_alt_imputed) from `bloodGasArterial_4bin_agg`;
+

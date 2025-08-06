@@ -20,13 +20,14 @@ CREATE TABLE sirs_score_components AS
 SELECT 
   tb.icustay_id,
   tb.hour_offset,
-  v.tempc as tempc,
-  v.heartrate as heartrate,
-  v.resprate as resprate,
+  v.tempc_min as tempc_min,
+  v.tempc_max as tempc_max,
+  v.heartrate_max as heartrate_max,
+  v.resprate_max as resprate_max,
   bg.paco2_min,
   l.wbc_min as wbc_min,
   l.wbc_max as wbc_max,
-  l.bands_imputed as bands_max
+  l.bands_max as bands_max
 FROM 4hr_time_bins tb
 LEFT JOIN sirs_bg_component bg
   ON tb.icustay_id = bg.icustay_id
@@ -34,7 +35,7 @@ LEFT JOIN sirs_bg_component bg
 LEFT JOIN vitals_4bin_imputed v
   ON tb.icustay_id = v.icustay_id
   AND tb.hour_offset = v.hour_offset
-LEFT JOIN labVals_4bin_imputed l
+LEFT JOIN labVals_4bin l
   ON tb.icustay_id = l.icustay_id
   AND tb.hour_offset = l.hour_offset;
 
@@ -90,7 +91,6 @@ SELECT
   tb.bin_start_time,
   tb.bin_end_time,
   tb.earliestOnset,
-  
   -- Combine all the scores to get SIRS
   -- Impute 0 if the score is missing
   COALESCE(s.temp_score, 0) +
@@ -121,5 +121,5 @@ CREATE INDEX idx_sirs_4bin_composite ON sirs_4bin(subject_id, hadm_id, icustay_i
 -- DROP TABLE sirs_score_calc;
 
 -- View final results
-SELECT * FROM sirs_4bin;
+SELECT AVG(sirs) FROM sirs_4bin;
 
