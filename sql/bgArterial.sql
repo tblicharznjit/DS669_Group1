@@ -915,3 +915,130 @@ CREATE INDEX idx_abg_agg_glucose_flags ON bloodGasArterial_4bin_agg(hyperglycemi
 
 select * from `bloodGasArterial_4bin_agg`;
 
+
+-- Magnesium
+ALTER TABLE bloodGasArterial_4bin_agg 
+ADD COLUMN magnesium_min DECIMAL(4,2),
+ADD COLUMN magnesium_max DECIMAL(4,2),
+ADD COLUMN magnesium_avg DECIMAL(4,2),
+ADD COLUMN magnesium_imputed DECIMAL(4,2);
+
+UPDATE bloodGasArterial_4bin_agg bg
+SET 
+    magnesium_min = (
+        SELECT MIN(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50960  -- Magnesium
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0.5
+        AND le.valuenum < 5.0  -- Reasonable filter for magnesium (mg/dL)
+    ),
+    magnesium_max = (
+        SELECT MAX(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50960
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0.5
+        AND le.valuenum < 5.0
+    ),
+    magnesium_avg = (
+        SELECT AVG(le.valuenum)
+        FROM labevents le
+        WHERE le.subject_id = bg.subject_id
+        AND le.hadm_id = bg.hadm_id
+        AND le.itemid = 50960
+        AND le.charttime >= bg.bin_start_time
+        AND le.charttime < bg.bin_end_time
+        AND le.valuenum IS NOT NULL
+        AND le.valuenum > 0.5
+        AND le.valuenum < 5.0
+    );
+
+DROP TEMPORARY TABLE IF EXISTS magnesium_patient_stats;
+CREATE TEMPORARY TABLE magnesium_patient_stats AS
+SELECT 
+    subject_id,
+    hadm_id,
+    icustay_id,
+    AVG(magnesium_avg) AS patient_magnesium_mean
+FROM bloodGasArterial_4bin_agg
+WHERE magnesium_avg IS NOT NULL
+GROUP BY subject_id, hadm_id, icustay_id;
+
+DROP TEMPORARY TABLE IF EXISTS magnesium_population_stats;
+CREATE TEMPORARY TABLE magnesium_population_stats AS
+SELECT 
+    AVG(magnesium_avg) AS pop_magnesium_mean
+FROM bloodGasArterial_4bin_agg
+WHERE magnesium_avg IS NOT NULL;
+
+DROP TEMPORARY TABLE IF EXISTS magnesium_filled;
+CREATE TEMPORARY TABLE magnesium_filled AS
+SELECT 
+    bg.subject_id,
+    bg.hadm_id,
+    bg.icustay_id,
+    bg.hour_offset,
+    bg.magnesium_avg,
+    -- Forward fill (carry last observation forward)
+    LAG(bg.magnesium_avg, 1) OVER (PARTITION BY bg.icustay_id ORDER BY bg.hour_offset) AS prev_magnesium,
+    LAG(bg.magnesium_avg, 2) OVER (PARTITION BY bg.icustay_id ORDER BY bg.hour_offset) AS prev_magnesium_2,
+    LAG(bg.magnesium_avg, 3) OVER (PARTITION BY bg.icustay_id ORDER BY bg.hour_offset) AS prev_magnesium_3,
+    -- Backward fill (next observation carried backward)
+    LEAD(bg.magnesium_avg, 1) OVER (PARTITION BY bg.icustay_id ORDER BY bg.hour_offset) AS next_magnesium,
+    LEAD(bg.magnesium_avg, 2) OVER (PARTITION BY bg.icustay_id ORDER BY bg.hour_offset) AS next_magnesium_2,
+    LEAD(bg.magnesium_avg, 3) OVER (PARTITION BY bg.icustay_id ORDER BY bg.hour_offset) AS next_magnesium_3,
+    -- Patient mean
+    ps.patient_magnesium_mean,
+    -- Population mean
+    pop.pop_magnesium_mean
+FROM bloodGasArterial_4bin_agg bg
+LEFT JOIN magnesium_patient_stats ps
+    ON bg.subject_id = ps.subject_id
+    AND bg.hadm_id = ps.hadm_id
+    AND bg.icustay_id = ps.icustay_id
+CROSS JOIN magnesium_population_stats pop;
+
+
+UPDATE bloodGasArterial_4bin_agg bg
+JOIN magnesium_filled mf
+    ON bg.subject_id = mf.subject_id
+    AND bg.hadm_id = mf.hadm_id
+    AND bg.icustay_id = mf.icustay_id
+    AND bg.hour_offset = mf.hour_offset
+SET bg.magnesium_imputed = 
+    COALESCE(
+        -- 1. Original measured value
+        mf.magnesium_avg,
+        -- 2. Forward fill (1-3 time bins back)
+        mf.prev_magnesium,
+        mf.prev_magnesium_2,
+        mf.prev_magnesium_3,
+        -- 3. Backward fill (1-3 time bins forward)
+        mf.next_magnesium,
+        mf.next_magnesium_2,
+        mf.next_magnesium_3,
+        -- 4. Patient-specific mean
+        mf.patient_magnesium_mean,
+        -- 5. Population mean
+        mf.pop_magnesium_mean,
+        -- 6. Clinical normal value (mid-range normal)
+        1.9  -- Normal Mg: 1.7-2.2 mg/dL, using 1.9 as default
+    );
+
+ALTER TABLE bloodGasArterial_4bin_agg 
+ADD COLUMN magnesium_imputed_flag TINYINT(1) DEFAULT 0;
+
+UPDATE bloodGasArterial_4bin_agg 
+SET magnesium_imputed_flag = CASE WHEN magnesium_avg IS NULL THEN 1 ELSE 0 END;
+
+
+SELECT AVG(magnesium_imputed) FROM `bloodGasArterial_4bin_agg`;

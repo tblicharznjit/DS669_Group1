@@ -355,12 +355,20 @@ forward_filled AS (
     LAG(bilirubin_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_bilirubin,
     LAG(platelet_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_platelet,
     LAG(wbc_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_wbc,
+    LAG(inr_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_inr,
+    LAG(pt_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_pt,
+    LAG(ptt_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_ptt,
+    LAG(bun_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_bun,
     -- Backward fill key values
     LEAD(lactate_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_lactate,
     LEAD(creatinine_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_creatinine,
     LEAD(bilirubin_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_bilirubin,
     LEAD(platelet_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_platelet,
-    LEAD(wbc_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_wbc
+    LEAD(wbc_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_wbc,
+    LEAD(inr_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_inr,
+    LEAD(pt_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_pt,
+    LEAD(ptt_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_ptt,
+    LEAD(bun_avg, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_bun
   FROM labVals_4bin lb
 )
 SELECT 
@@ -382,6 +390,14 @@ SELECT
   ff.platelet_max,
   ff.wbc_min,
   ff.wbc_max,
+  ff.inr_min,
+  ff.inr_max,
+  ff.pt_min,
+  ff.pt_max,
+  ff.ptt_min,
+  ff.ptt_max,
+  ff.bun_min,
+  ff.bun_max,
   -- Imputed average values for key labs (most important for analysis)
   COALESCE(
     ff.lactate_avg,
@@ -427,6 +443,44 @@ SELECT
     ps.pop_mean_wbc,
     8.0                    -- Normal WBC: 4-11 K/uL
   ) AS wbc_avg,
+  
+  -- Add INR, PT, PTT, BUN with imputation
+  COALESCE(
+    ff.inr_avg,
+    ff.prev_inr,
+    ff.next_inr,
+    ls.patient_mean_inr,
+    ps.pop_mean_inr,
+    1.0                    -- Normal INR: 0.8-1.2
+  ) AS inr_avg,
+  
+  COALESCE(
+    ff.pt_avg,
+    ff.prev_pt,
+    ff.next_pt,
+    ls.patient_mean_pt,
+    ps.pop_mean_pt,
+    12.0                   -- Normal PT: 11-15 seconds
+  ) AS pt_avg,
+  
+  COALESCE(
+    ff.ptt_avg,
+    ff.prev_ptt,
+    ff.next_ptt,
+    ls.patient_mean_ptt,
+    ps.pop_mean_ptt,
+    30.0                   -- Normal PTT: 25-35 seconds
+  ) AS ptt_avg,
+  
+  COALESCE(
+    ff.bun_avg,
+    ff.prev_bun,
+    ff.next_bun,
+    ls.patient_mean_bun,
+    ps.pop_mean_bun,
+    15.0                   -- Normal BUN: 7-20 mg/dL
+  ) AS bun_avg,
+
   -- Keep other important labs with basic imputation
   COALESCE(ff.glucose_avg, ls.patient_mean_glucose, ps.pop_mean_glucose, 120) AS glucose_avg,
   COALESCE(ff.hemoglobin_avg, ls.patient_mean_hemoglobin, ps.pop_mean_hemoglobin, 12) AS hemoglobin_avg,
@@ -439,6 +493,8 @@ SELECT
                      ls.patient_mean_creatinine, ps.pop_mean_creatinine, 1.0) > 2.0 THEN 1 ELSE 0 END AS acute_kidney_injury,
   CASE WHEN COALESCE(ff.platelet_avg, ff.prev_platelet, ff.next_platelet, 
                      ls.patient_mean_platelet, ps.pop_mean_platelet, 250) < 100 THEN 1 ELSE 0 END AS thrombocytopenia,
+  CASE WHEN COALESCE(ff.inr_avg, ff.prev_inr, ff.next_inr, 
+                     ls.patient_mean_inr, ps.pop_mean_inr, 1.0) > 1.5 THEN 1 ELSE 0 END AS coagulopathy,
   -- Measurement counts
   ff.lactate_measurements,
   ff.creatinine_measurements,
@@ -450,7 +506,11 @@ SELECT
   CASE WHEN ff.creatinine_avg IS NULL THEN 1 ELSE 0 END AS creatinine_imputed,
   CASE WHEN ff.bilirubin_avg IS NULL THEN 1 ELSE 0 END AS bilirubin_imputed,
   CASE WHEN ff.platelet_avg IS NULL THEN 1 ELSE 0 END AS platelet_imputed,
-  CASE WHEN ff.wbc_avg IS NULL THEN 1 ELSE 0 END AS wbc_imputed
+  CASE WHEN ff.wbc_avg IS NULL THEN 1 ELSE 0 END AS wbc_imputed,
+  CASE WHEN ff.inr_avg IS NULL THEN 1 ELSE 0 END AS inr_imputed,
+  CASE WHEN ff.pt_avg IS NULL THEN 1 ELSE 0 END AS pt_imputed,
+  CASE WHEN ff.ptt_avg IS NULL THEN 1 ELSE 0 END AS ptt_imputed,
+  CASE WHEN ff.bun_avg IS NULL THEN 1 ELSE 0 END AS bun_imputed
 
 FROM forward_filled ff
 LEFT JOIN lab_stats ls
@@ -466,6 +526,6 @@ CREATE INDEX idx_labs_imp_hour ON labVals_4bin_imputed(hour_offset);
 CREATE INDEX idx_labs_imp_lactate ON labVals_4bin_imputed(severe_hyperlactatemia);
 CREATE INDEX idx_labs_imp_aki ON labVals_4bin_imputed(acute_kidney_injury);
 CREATE INDEX idx_labs_imp_tcp ON labVals_4bin_imputed(thrombocytopenia);
-
+CREATE INDEX idx_labs_imp_coag ON labVals_4bin_imputed(coagulopathy);
 -- Verification queries
 SELECT * FROM `labVals_4bin_imputed`;
