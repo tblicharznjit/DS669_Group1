@@ -93,6 +93,7 @@ SELECT
     -- Diastolic BP (3)
     AVG(CASE WHEN pvt.VitalID = 3 THEN pvt.valuenum ELSE NULL END) AS diasbp,
     -- Mean BP (4)
+    MIN(CASE WHEN pvt.VitalID = 4 THEN pvt.valuenum ELSE NULL END) AS meanbp_min,
     AVG(CASE WHEN pvt.VitalID = 4 THEN pvt.valuenum ELSE NULL END) AS meanbp,  
     -- Respiratory Rate (5)
     AVG(CASE WHEN pvt.VitalID = 5 THEN pvt.valuenum ELSE NULL END) AS resprate,
@@ -170,6 +171,7 @@ WITH vital_stats AS (
         AVG(sysbp) AS patient_mean_sysbp,
         AVG(diasbp) AS patient_mean_diasbp,
         AVG(meanbp) AS patient_mean_mbp,
+        AVG(meanbp_min) AS patient_mean_mbp_min, 
         AVG(resprate) AS patient_mean_rr,
         AVG(tempc) AS patient_mean_temp,
         AVG(spo2) AS patient_mean_spo2,
@@ -187,6 +189,7 @@ population_stats AS (
         AVG(sysbp) AS pop_mean_sysbp,
         AVG(diasbp) AS pop_mean_diasbp,
         AVG(meanbp) AS pop_mean_mbp,
+        AVG(meanbp_min) AS pop_mean_mbp_min, 
         AVG(resprate) AS pop_mean_rr,
         AVG(tempc) AS pop_mean_temp,
         AVG(spo2) AS pop_mean_spo2,
@@ -205,6 +208,7 @@ forward_filled AS (
         LAG(sysbp, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_sysbp,
         LAG(diasbp, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_diasbp,
         LAG(meanbp, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_mbp,
+        LAG(meanbp_min, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_mbp_min,
         LAG(resprate, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_rr,
         LAG(tempc, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_temp,
         LAG(spo2, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_spo2,
@@ -214,6 +218,7 @@ forward_filled AS (
         LEAD(sysbp, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_sysbp,
         LEAD(diasbp, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_diasbp,
         LEAD(meanbp, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_mbp,
+        LEAD(meanbp_min, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_mbp_min,
         LEAD(resprate, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_rr,
         LEAD(tempc, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_temp,
         LEAD(spo2, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_spo2,
@@ -263,6 +268,15 @@ SELECT
         ps.pop_mean_mbp,
         90
     ) AS meanbp,
+     -- Mean BP Min Imputation (Normal: 65-95 mmHg) - Added this
+    COALESCE(
+        ff.meanbp_min,
+        ff.prev_mbp_min,
+        ff.next_mbp_min,
+        vs.patient_mean_mbp_min,
+        ps.pop_mean_mbp_min,
+        85                      -- Clinical default (slightly lower than mean)
+    ) AS meanbp_min,
     -- Respiratory Rate Imputation (Normal: 12-20 /min)
     COALESCE(
         ff.resprate,
@@ -304,6 +318,7 @@ SELECT
     CASE WHEN ff.sysbp IS NULL THEN 1 ELSE 0 END AS sysbp_imputed,
     CASE WHEN ff.diasbp IS NULL THEN 1 ELSE 0 END AS diasbp_imputed,
     CASE WHEN ff.meanbp IS NULL THEN 1 ELSE 0 END AS meanbp_imputed,
+    CASE WHEN ff.meanbp_min IS NULL THEN 1 ELSE 0 END AS meanbp_min_imputed, 
     CASE WHEN ff.resprate IS NULL THEN 1 ELSE 0 END AS resprate_imputed,
     CASE WHEN ff.tempc IS NULL THEN 1 ELSE 0 END AS tempc_imputed,
     CASE WHEN ff.spo2 IS NULL THEN 1 ELSE 0 END AS spo2_imputed,
@@ -323,7 +338,7 @@ CREATE INDEX idx_vitals_imputed_hour ON vitals_4bin_imputed(hour_offset);
 CREATE INDEX idx_vitals_imputed_composite ON vitals_4bin_imputed(subject_id, hadm_id, icustay_id);
 
 
-SELECT AVG(heartrate), AVG(spo2), AVG(resprate), AVG(meanbp), AVG(diasbp), AVG(sysbp), AVG(tempc) FROM vitals_4bin_imputed;
+SELECT AVG(heartrate), AVG(spo2), AVG(resprate), AVG(meanbp), AVG(diasbp), AVG(sysbp), AVG(tempc), AVG(glucose/18.0182) FROM vitals_4bin_imputed;
 
 ALTER TABLE vitals_4bin_imputed DROP COLUMN glucose, DROP COLUMN glucose_imputed;
 
@@ -332,3 +347,5 @@ on v.subject_id = d.subject_id
 AND v.hadm_id = d.hadm_id
 AND v.icustay_id = d.icustay_id
 ANd d.hour_offset = v.hour_offset;
+
+SELECT * FROM vitals_4bin_imputed;

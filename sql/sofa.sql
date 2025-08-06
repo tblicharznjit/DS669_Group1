@@ -280,3 +280,373 @@ CREATE INDEX idx_sc_comp ON sepsisCohort(subject_id, hadm_id, icustay_id);
 
 SELECT COUNT(DISTINCT subject_id) FROM `sepsisCohort`;
 
+
+
+
+
+
+
+
+-- Step 1: Create patient weights from echo data binned into 4-hour intervals
+DROP TABLE IF EXISTS patient_weights_echo_4bin;
+CREATE TABLE patient_weights_echo_4bin AS
+SELECT 
+  tb.subject_id,
+  tb.hadm_id,
+  tb.icustay_id,
+  tb.hour_offset,
+  tb.bin_start_time,
+  tb.bin_end_time,
+  AVG(echo.weight * 0.45359237) AS weight -- Convert lbs to kg
+FROM 4hr_time_bins tb
+LEFT JOIN echoData echo
+  ON tb.hadm_id = echo.hadm_id
+  AND echo.charttime >= tb.bin_start_time
+  AND echo.charttime < tb.bin_end_time
+GROUP BY tb.subject_id, tb.hadm_id, tb.icustay_id, tb.hour_offset, 
+         tb.bin_start_time, tb.bin_end_time;
+
+-- Add indexes
+CREATE INDEX idx_weights_echo_4bin_icustay ON patient_weights_echo_4bin(icustay_id);
+CREATE INDEX idx_weights_echo_4bin_hour ON patient_weights_echo_4bin(hour_offset);
+CREATE INDEX idx_weights_echo_4bin_composite ON patient_weights_echo_4bin(icustay_id, hour_offset);
+
+
+CREATE INDEX idx_inputevents_cv_icustay_time ON inputevents_cv(icustay_id, charttime);
+CREATE INDEX idx_inputevents_cv_itemid ON inputevents_cv(itemid);
+CREATE INDEX idx_inputevents_cv_composite ON inputevents_cv(icustay_id, itemid, charttime);
+
+-- Step 2: Create vasopressor tables using 4-hour bins
+DROP TABLE IF EXISTS vasopressors_cv_4bin;
+CREATE TABLE vasopressors_cv_4bin AS
+WITH weight_lookup AS (
+  SELECT 
+    icustay_id,
+    hour_offset,
+    COALESCE(di.weight, ec.weight, 80) AS patient_weight
+  FROM 4hr_time_bins tb
+  LEFT JOIN demographics_imputed di USING (icustay_id, hour_offset)
+  LEFT JOIN patient_weights_echo_4bin ec USING (icustay_id, hour_offset)
+),
+vaso_data AS (
+  SELECT 
+    tb.subject_id,
+    tb.hadm_id,
+    tb.icustay_id,
+    tb.hour_offset,
+    tb.bin_start_time,
+    tb.bin_end_time,
+    cv.itemid,
+    MAX(cv.rate) AS max_rate,
+    wl.patient_weight
+  FROM 4hr_time_bins tb
+  INNER JOIN inputevents_cv cv
+    ON tb.icustay_id = cv.icustay_id
+    AND cv.charttime >= tb.bin_start_time
+    AND cv.charttime < tb.bin_end_time
+    AND cv.itemid IN (30047, 30120, 30044, 30119, 30309, 30043, 30307, 30042, 30306)
+    AND cv.rate > 0
+  LEFT JOIN weight_lookup wl
+    ON tb.icustay_id = wl.icustay_id
+    AND tb.hour_offset = wl.hour_offset
+  GROUP BY tb.subject_id, tb.hadm_id, tb.icustay_id, tb.hour_offset,
+           tb.bin_start_time, tb.bin_end_time, cv.itemid, wl.patient_weight
+)
+SELECT 
+  subject_id,
+  hadm_id,
+  icustay_id,
+  hour_offset,
+  bin_start_time,
+  bin_end_time,
+  MAX(CASE
+    WHEN itemid = 30047 THEN max_rate / patient_weight -- mcg/min to mcg/kg/min
+    WHEN itemid = 30120 THEN max_rate
+    ELSE NULL
+  END) AS rate_norepinephrine,
+  MAX(CASE
+    WHEN itemid = 30044 THEN max_rate / patient_weight
+    WHEN itemid IN (30119, 30309) THEN max_rate
+    ELSE NULL
+  END) AS rate_epinephrine,
+  MAX(CASE WHEN itemid IN (30043, 30307) THEN max_rate ELSE NULL END) AS rate_dopamine,
+  MAX(CASE WHEN itemid IN (30042, 30306) THEN max_rate ELSE NULL END) AS rate_dobutamine
+FROM vaso_data
+GROUP BY subject_id, hadm_id, icustay_id, hour_offset, bin_start_time, bin_end_time;
+
+DROP TABLE IF EXISTS vasopressors_mv_4bin;
+CREATE TABLE vasopressors_mv_4bin AS
+SELECT 
+  tb.subject_id,
+  tb.hadm_id,
+  tb.icustay_id,
+  tb.hour_offset,
+  tb.bin_start_time,
+  tb.bin_end_time,
+  MAX(CASE WHEN mv.itemid = 221906 THEN mv.rate END) AS rate_norepinephrine,
+  MAX(CASE WHEN mv.itemid = 221289 THEN mv.rate END) AS rate_epinephrine,
+  MAX(CASE WHEN mv.itemid = 221662 THEN mv.rate END) AS rate_dopamine,
+  MAX(CASE WHEN mv.itemid = 221653 THEN mv.rate END) AS rate_dobutamine
+FROM 4hr_time_bins tb
+LEFT JOIN inputevents_mv mv
+  ON tb.icustay_id = mv.icustay_id
+  AND mv.starttime >= tb.bin_start_time
+  AND mv.starttime < tb.bin_end_time
+  AND mv.itemid IN (221906, 221289, 221662, 221653)
+  AND mv.statusdescription != 'Rewritten'
+GROUP BY tb.subject_id, tb.hadm_id, tb.icustay_id, tb.hour_offset,
+         tb.bin_start_time, tb.bin_end_time;
+
+-- Add indexes
+CREATE INDEX idx_vaso_cv_4bin_icustay ON vasopressors_cv_4bin(icustay_id);
+CREATE INDEX idx_vaso_cv_4bin_hour ON vasopressors_cv_4bin(hour_offset);
+CREATE INDEX idx_vaso_mv_4bin_icustay ON vasopressors_mv_4bin(icustay_id);
+CREATE INDEX idx_vaso_mv_4bin_hour ON vasopressors_mv_4bin(hour_offset);
+
+-- Step 3: Create PaO2/FiO2 ratio tables using 4-hour bins
+DROP TABLE IF EXISTS pafi_intermediate_4bin;
+CREATE TABLE pafi_intermediate_4bin AS
+SELECT 
+  tb.subject_id,
+  tb.hadm_id,
+  tb.icustay_id,
+  tb.hour_offset,
+  tb.bin_start_time,
+  tb.bin_end_time,
+  bg.pao2fio2_imputed AS pao2fio2,
+  CASE WHEN vt.intubated = 1 OR vt.ventilator = 1 THEN 1 ELSE 0 END AS isvent
+FROM 4hr_time_bins tb
+LEFT JOIN bloodGasArterial_4bin_agg bg
+  ON tb.icustay_id = bg.icustay_id
+  AND tb.hour_offset = bg.hour_offset
+LEFT JOIN ventilation_4bin vt
+  ON tb.icustay_id = vt.icustay_id
+  AND tb.hour_offset = vt.hour_offset;
+
+
+
+DROP TABLE IF EXISTS pafi_intermediate_4bin;
+CREATE TABLE pafi_intermediate_4bin AS
+SELECT 
+  bg.icustay_id,
+  bg.bin_start_time,
+  bg.bin_end_time,
+  bg.hour_offset,
+  bg.pao2fio2_calculated_imputed,
+  CASE WHEN vd.icustay_id IS NOT NULL THEN 1 ELSE 0 END AS isvent
+FROM bloodGasArterial_4bin_agg bg
+LEFT JOIN ventilation_4bin vd
+  ON bg.icustay_id = vd.icustay_id
+  AND bg.bin_start_time = vd.bin_start_time 
+  AND vd.bin_end_time = bg.bin_end_time;
+
+DROP TABLE IF EXISTS pafi_final_4bin;
+CREATE TABLE pafi_final_4bin AS
+SELECT 
+  icustay_id,
+  hour_offset,
+  MIN(CASE WHEN isvent = 0 THEN pao2fio2_calculated_imputed ELSE NULL END) AS pao2fio2_novent_min,
+  MIN(CASE WHEN isvent = 1 THEN pao2fio2_calculated_imputed ELSE NULL END) AS pao2fio2_vent_min
+FROM pafi_intermediate_4bin
+GROUP BY icustay_id, hour_offset;
+
+-- Add indexes
+CREATE INDEX idx_pafi_inter_icustay ON pafi_intermediate_4bin(icustay_id);
+CREATE INDEX idx_pafi_final_icustay ON pafi_final_4bin(icustay_id);  
+
+-- Add indexes
+CREATE INDEX idx_pafi_inter_4bin_icustay ON pafi_intermediate_4bin(icustay_id);
+CREATE INDEX idx_pafi_inter_4bin_hour ON pafi_intermediate_4bin(hour_offset);
+CREATE INDEX idx_pafi_final_4bin_icustay ON pafi_final_4bin(icustay_id);
+CREATE INDEX idx_pafi_final_4bin_hour ON pafi_final_4bin(hour_offset);
+
+-- Step 4: Combine all SOFA components using 4-hour bins
+DROP TABLE IF EXISTS sofa_components_4bin;
+CREATE TABLE sofa_components_4bin AS
+SELECT 
+  tb.subject_id,
+  tb.hadm_id,
+  tb.icustay_id,
+  tb.hour_offset,
+  tb.bin_start_time,
+  tb.bin_end_time,
+  tb.earliestOnset,
+  v.meanbp_min AS meanbp_min,
+  COALESCE(cv.rate_norepinephrine, mv.rate_norepinephrine) AS rate_norepinephrine,
+  COALESCE(cv.rate_epinephrine, mv.rate_epinephrine) AS rate_epinephrine,
+  COALESCE(cv.rate_dopamine, mv.rate_dopamine) AS rate_dopamine,
+  COALESCE(cv.rate_dobutamine, mv.rate_dobutamine) AS rate_dobutamine,
+  l.creatinine_max AS creatinine_max,
+  l.bilirubin_max AS bilirubin_max,
+  l.platelet_min AS platelet_min,
+  pf.pao2fio2_novent_min,
+  pf.pao2fio2_vent_min,
+  uo.urineoutput,
+  gcs.avg_gcs_imputed AS mingcs,
+  di.weight
+FROM 4hr_time_bins tb
+LEFT JOIN vitals_4bin_imputed v
+  ON tb.icustay_id = v.icustay_id
+  AND tb.hour_offset = v.hour_offset
+LEFT JOIN labVals_4bin_imputed l
+  ON tb.icustay_id = l.icustay_id
+  AND tb.hour_offset = l.hour_offset
+LEFT JOIN urineOutput_4bin_imputed uo
+  ON tb.icustay_id = uo.icustay_id
+  AND tb.hour_offset = uo.hour_offset
+LEFT JOIN gcs_4bin_imputed gcs
+  ON tb.icustay_id = gcs.icustay_id
+  AND tb.hour_offset = gcs.hour_offset
+LEFT JOIN vasopressors_cv_4bin cv
+  ON tb.icustay_id = cv.icustay_id
+  AND tb.hour_offset = cv.hour_offset
+LEFT JOIN vasopressors_mv_4bin mv
+  ON tb.icustay_id = mv.icustay_id
+  AND tb.hour_offset = mv.hour_offset
+LEFT JOIN pafi_final_4bin pf
+  ON tb.icustay_id = pf.icustay_id
+  AND tb.hour_offset = pf.hour_offset
+LEFT JOIN demographics_imputed di
+  ON tb.icustay_id = di.icustay_id
+  AND tb.hour_offset = di.hour_offset;
+
+-- Add indexes
+CREATE INDEX idx_sofa_comp_4bin_icustay ON sofa_components_4bin(icustay_id);
+CREATE INDEX idx_sofa_comp_4bin_hour ON sofa_components_4bin(hour_offset);
+CREATE INDEX idx_sofa_comp_4bin_composite ON sofa_components_4bin(icustay_id, hour_offset);
+
+-- Step 5: Calculate individual SOFA scores for each 4-hour bin
+DROP TABLE IF EXISTS sofa_scores_4bin;
+CREATE TABLE sofa_scores_4bin AS
+SELECT 
+  subject_id,
+  hadm_id,
+  icustay_id,
+  hour_offset,
+  bin_start_time,
+  bin_end_time,
+  earliestOnset,
+  -- Respiration SOFA
+  CASE
+    WHEN pao2fio2_vent_min < 100 THEN 4
+    WHEN pao2fio2_vent_min < 200 THEN 3
+    WHEN pao2fio2_novent_min < 300 THEN 2
+    WHEN pao2fio2_novent_min < 400 THEN 1
+    WHEN COALESCE(pao2fio2_vent_min, pao2fio2_novent_min) IS NULL THEN 0
+    ELSE 0
+  END AS respiration,
+  -- Coagulation SOFA
+  CASE
+    WHEN platelet_min < 20 THEN 4
+    WHEN platelet_min < 50 THEN 3
+    WHEN platelet_min < 100 THEN 2
+    WHEN platelet_min < 150 THEN 1
+    WHEN platelet_min IS NULL THEN 0
+    ELSE 0
+  END AS coagulation,
+  -- Liver SOFA
+  CASE
+    WHEN bilirubin_max >= 12.0 THEN 4
+    WHEN bilirubin_max >= 6.0 THEN 3
+    WHEN bilirubin_max >= 2.0 THEN 2
+    WHEN bilirubin_max >= 1.2 THEN 1
+    WHEN bilirubin_max IS NULL THEN 0
+    ELSE 0
+  END AS liver,
+  -- Cardiovascular SOFA
+  CASE
+    WHEN rate_dopamine > 15 OR rate_epinephrine > 0.1 OR rate_norepinephrine > 0.1 THEN 4
+    WHEN rate_dopamine > 5 OR rate_epinephrine <= 0.1 OR rate_norepinephrine <= 0.1 THEN 3
+    WHEN rate_dopamine > 0 OR rate_dobutamine > 0 THEN 2
+    WHEN meanbp_min < 70 THEN 1
+    WHEN COALESCE(meanbp_min, rate_dopamine, rate_dobutamine, rate_epinephrine, rate_norepinephrine) IS NULL THEN 0
+    ELSE 0
+  END AS cardiovascular,
+  -- CNS SOFA
+  CASE
+    WHEN mingcs >= 13 AND mingcs <= 14 THEN 1
+    WHEN mingcs >= 10 AND mingcs <= 12 THEN 2
+    WHEN mingcs >= 6 AND mingcs <= 9 THEN 3
+    WHEN mingcs < 6 THEN 4
+    WHEN mingcs IS NULL THEN 0
+    ELSE 0
+  END AS cns,
+  -- Renal SOFA
+  CASE
+    WHEN creatinine_max >= 5.0 THEN 4
+    WHEN urineoutput < 200 THEN 4
+    WHEN creatinine_max >= 3.5 AND creatinine_max < 5.0 THEN 3
+    WHEN urineoutput < 500 THEN 3
+    WHEN creatinine_max >= 2.0 AND creatinine_max < 3.5 THEN 2
+    WHEN creatinine_max >= 1.2 AND creatinine_max < 2.0 THEN 1
+    WHEN COALESCE(urineoutput, creatinine_max) IS NULL THEN 0
+    ELSE 0
+  END AS renal,
+  -- Component values for reference
+  meanbp_min,
+  rate_norepinephrine,
+  rate_epinephrine,
+  rate_dopamine,
+  rate_dobutamine,
+  creatinine_max,
+  bilirubin_max,
+  platelet_min,
+  pao2fio2_novent_min,
+  pao2fio2_vent_min,
+  urineoutput,
+  mingcs,
+  weight
+FROM sofa_components_4bin;
+
+-- Add indexes
+CREATE INDEX idx_sofa_scores_4bin_icustay ON sofa_scores_4bin(icustay_id);
+CREATE INDEX idx_sofa_scores_4bin_hour ON sofa_scores_4bin(hour_offset);
+CREATE INDEX idx_sofa_scores_4bin_composite ON sofa_scores_4bin(icustay_id, hour_offset);
+
+-- Step 6: Create final SOFA table with total scores for each 4-hour bin
+DROP TABLE IF EXISTS sofa_table_4bin;
+CREATE TABLE sofa_table_4bin AS
+SELECT 
+  subject_id,
+  hadm_id,
+  icustay_id,
+  hour_offset,
+  bin_start_time,
+  bin_end_time,
+  earliestOnset,
+  -- Total SOFA score
+  COALESCE(respiration, 0) + COALESCE(coagulation, 0) + COALESCE(liver, 0) +
+  COALESCE(cardiovascular, 0) + COALESCE(cns, 0) + COALESCE(renal, 0) AS SOFA,
+  -- Individual component scores
+  respiration,
+  coagulation,
+  liver,
+  cardiovascular,
+  cns,
+  renal,
+  -- Component values for analysis
+  meanbp_min,
+  rate_norepinephrine,
+  rate_epinephrine,
+  rate_dopamine,
+  rate_dobutamine,
+  creatinine_max,
+  bilirubin_max,
+  platelet_min,
+  pao2fio2_novent_min,
+  pao2fio2_vent_min,
+  urineoutput,
+  mingcs,
+  weight
+FROM sofa_scores_4bin
+ORDER BY icustay_id, hour_offset;
+
+-- Add comprehensive indexes
+CREATE INDEX idx_sofa_table_4bin_icustay ON sofa_table_4bin(icustay_id);
+CREATE INDEX idx_sofa_table_4bin_hour ON sofa_table_4bin(hour_offset);
+CREATE INDEX idx_sofa_table_4bin_sofa ON sofa_table_4bin(SOFA);
+CREATE INDEX idx_sofa_table_4bin_composite ON sofa_table_4bin(icustay_id, hour_offset);
+CREATE INDEX idx_sofa_table_4bin_onset ON sofa_table_4bin(earliestOnset);
+
+SELECT AVG(`SOFA`) from sofa_table_4bin;
+
