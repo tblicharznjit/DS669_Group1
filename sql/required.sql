@@ -561,9 +561,69 @@ SELECT * FROM 4hr_time_bins;
 CREATE INDEX idx_time_bins_icustay ON 4hr_time_bins(icustay_id);
 CREATE INDEX idx_time_bins_times ON 4hr_time_bins(bin_start_time, bin_end_time);
 
--- weight
-CREATE TABLE weight_bins AS
+CREATE INDEX idx_chartevents_composite ON chartevents(icustay_id, itemid, charttime, valuenum);
+CREATE INDEX idx_chartevents_composite1 ON chartevents(icustay_id, hadm_id, subject_id);
+CREATE INDEX idx_time_bins_composite ON 4hr_time_bins(icustay_id, hour_offset, bin_start_time, bin_end_time);
+
+CREATE TABLE ceFiltered AS
 SELECT 
+sc.subject_id,
+sc.hadm_id, 
+sc.icustay_id,
+sc.earliestOnset,
+ce.row_id,
+ce.charttime,
+ce.storetime,
+ce.itemid,
+ce.value,
+ce.valuenum,
+ce.valueuom,
+ce.warning,
+ce.error,
+ce.resultstatus,
+ce.stopped
+FROM sepsisCohort sc 
+JOIN chartevents ce 
+ON sc.subject_id = ce.subject_id 
+AND sc.hadm_id = ce.hadm_id 
+AND sc.icustay_id = ce.icustay_id;
+
+-- Primary identification indexes
+CREATE INDEX idx_ceFiltered_subject ON ceFiltered(subject_id);
+CREATE INDEX idx_ceFiltered_hadm ON ceFiltered(hadm_id);
+CREATE INDEX idx_ceFiltered_icustay ON ceFiltered(icustay_id);
+
+-- Time-based indexes (critical for time binning)
+CREATE INDEX idx_ceFiltered_charttime ON ceFiltered(charttime);
+CREATE INDEX idx_ceFiltered_icustay_time ON ceFiltered(icustay_id, charttime);
+
+-- Item-based indexes (for filtering measurements)
+CREATE INDEX idx_ceFiltered_itemid ON ceFiltered(itemid);
+CREATE INDEX idx_ceFiltered_itemid_time ON ceFiltered(itemid, charttime);
+
+-- Value-based indexes (for filtering valid data)
+CREATE INDEX idx_ceFiltered_valuenum ON ceFiltered(valuenum);
+CREATE INDEX idx_ceFiltered_error ON ceFiltered(error);
+
+-- Ultimate performance index for time binning queries
+CREATE INDEX idx_ceFiltered_ultimate ON ceFiltered(icustay_id, itemid, charttime, valuenum);
+
+-- Time range filtering
+CREATE INDEX idx_ceFiltered_icustay_item_time ON ceFiltered(icustay_id, itemid, charttime);
+
+-- Data quality filtering
+CREATE INDEX idx_ceFiltered_quality ON ceFiltered(icustay_id, itemid, valuenum, error);
+
+-- Onset-based filtering 
+CREATE INDEX idx_ceFiltered_onset_filter ON ceFiltered(subject_id, hadm_id, icustay_id, charttime);
+
+
+
+-- weight
+CREATE TABLE weight_4bin AS
+SELECT 
+    tb.subject_id,
+    tb.hadm_id,
     tb.icustay_id,
     tb.hour_offset,
     AVG(CASE
@@ -571,22 +631,9 @@ SELECT
         WHEN c.itemid = 3581 THEN c.valuenum * 0.45359237
         WHEN c.itemid = 3582 THEN c.valuenum * 0.0283495231
         ELSE NULL
-    END) AS avg_weight,
-    MIN(CASE
-        WHEN c.itemid IN (762, 763, 3723, 3580, 226512) THEN c.valuenum
-        WHEN c.itemid = 3581 THEN c.valuenum * 0.45359237
-        WHEN c.itemid = 3582 THEN c.valuenum * 0.0283495231
-        ELSE NULL
-    END) AS min_weight,
-    MAX(CASE
-        WHEN c.itemid IN (762, 763, 3723, 3580, 226512) THEN c.valuenum
-        WHEN c.itemid = 3581 THEN c.valuenum * 0.45359237
-        WHEN c.itemid = 3582 THEN c.valuenum * 0.0283495231
-        ELSE NULL
-    END) AS max_weight,
-    COUNT(c.valuenum) AS weight_count
-FROM time_bins tb
-LEFT JOIN chartevents c
+    END) AS weight
+FROM 4hr_time_bins tb
+LEFT JOIN ceFiltered c
     ON tb.icustay_id = c.icustay_id
     AND c.charttime >= tb.bin_start_time
     AND c.charttime < tb.bin_end_time
@@ -594,9 +641,14 @@ LEFT JOIN chartevents c
     AND c.valuenum IS NOT NULL 
     AND c.valuenum != 0
     AND (c.error IS NULL OR c.error = 0)
-GROUP BY tb.icustay_id, tb.hour_offset;
+GROUP BY tb.subject_id, tb.hadm_id, tb.icustay_id, tb.hour_offset;
 
-CREATE INDEX idx_weight_bins_icustay ON weight_bins(icustay_id);
+CREATE INDEX idx_weight_bins_icustay ON weight_4bin(icustay_id);
+CREATE INDEX idx_weight_bins_sub ON weight_4bin(subject_id);
+CREATE INDEX idx_weight_bins_hadm ON weight_4bin(hadm_id);
+CREATE INDEX idx_weight_bins_composite ON weight_4bin(subject_id, hadm_id,icustay_id);
+
+SELECT * FROM weight_4bin;
 
 -- Step 2: final demographics table
 DROP TABLE IF EXISTS demographics;
@@ -606,7 +658,7 @@ SELECT
     sc.hadm_id,
     sc.icustay_id,
     sc.earliestOnset,
-    sc.AGE AS age,
+    a.AGE AS age,
     CASE WHEN a.gender = 'M' THEN 1 ELSE 0 END AS gender,
     CASE WHEN a.ethnicity LIKE '%WHITE%' THEN 1 ELSE 0 END AS race_white,
     CASE WHEN a.ethnicity LIKE '%BLACK%' THEN 1 ELSE 0 END AS race_black,
@@ -624,8 +676,8 @@ SELECT
         ELSE 0 
     END AS mortality_90day,
     a.expire_flag as death,
-    w.weight,
-    w.charttime AS weight_charttime  
+    hour_offset,
+    w.weight
 FROM sepsisCohort sc
 JOIN adultsTreated a
     ON sc.subject_id = a.subject_id
@@ -635,7 +687,7 @@ JOIN icustays ie
     AND sc.hadm_id = ie.hadm_id
     AND sc.icustay_id = ie.icustay_id
     AND sc.earliestOnset BETWEEN ie.intime AND ie.outtime
-LEFT JOIN patient_weights_demo w
+JOIN weight_4bin w
     ON sc.icustay_id = w.icustay_id;
 
 -- Add indexes
@@ -645,4 +697,51 @@ CREATE INDEX idx_demographics_icustay ON demographics(icustay_id);
 
 SELECT COUNT(DISTINCT subject_id) FROM demographics WHERE mortality_90day = 1;
 
--- Calculate average weight of all patients
+SELECT AVG(weight) FROM demographics;
+
+SELECT * FROM demographics;
+
+
+-- Create demographics table with imputed weights
+DROP TABLE IF EXISTS demographics_imputed;
+CREATE TABLE demographics_imputed AS
+SELECT 
+    d.subject_id,
+    d.hadm_id,
+    d.icustay_id,
+    d.earliestOnset,
+    d.age,
+    d.gender,
+    d.race_white,
+    d.race_black,
+    d.race_asian,
+    d.race_latino,
+    d.race_other,
+    d.mortality_90day,
+    d.death,
+    d.hour_offset,
+    -- Impute weight with patient's mean weight
+    COALESCE(d.weight, pmw.mean_weight) AS weight,
+    -- Add flag to indicate imputed values
+    CASE WHEN d.weight IS NULL THEN 1 ELSE 0 END AS weight_imputed
+FROM demographics d
+LEFT JOIN (
+    SELECT 
+        subject_id,
+        hadm_id,
+        icustay_id,
+        AVG(weight) AS mean_weight
+    FROM demographics
+    WHERE weight IS NOT NULL
+    GROUP BY subject_id, hadm_id, icustay_id
+) pmw
+    ON d.subject_id = pmw.subject_id
+    AND d.hadm_id = pmw.hadm_id
+    AND d.icustay_id = pmw.icustay_id;
+
+-- Add indexes
+CREATE INDEX idx_demographics_imputed_subject ON demographics_imputed(subject_id);
+CREATE INDEX idx_demographics_imputed_hadm ON demographics_imputed(hadm_id);
+CREATE INDEX idx_demographics_imputed_icustay ON demographics_imputed(icustay_id);
+
+SELECT * FROM demographics_imputed;

@@ -245,13 +245,11 @@ SELECT
     tb.bin_start_time,
     tb.bin_end_time,
     tb.earliestOnset,
-    
     -- GCS aggregations
     MIN(gc.GCS) AS min_gcs,
     MAX(gc.GCS) AS max_gcs,
     AVG(gc.GCS) AS avg_gcs,
     COUNT(gc.GCS) AS gcs_count,
-    
     -- Component aggregations
     MIN(gc.GCSMotor) AS min_gcs_motor,
     MAX(gc.GCSMotor) AS max_gcs_motor,
@@ -264,7 +262,6 @@ SELECT
     MIN(gc.GCSEyes) AS min_gcs_eyes,
     MAX(gc.GCSEyes) AS max_gcs_eyes,
     AVG(gc.GCSEyes) AS avg_gcs_eyes,
-    
     -- EndoTracheal flag (1 if any measurement shows intubation)
     MAX(gc.EndoTrachFlag) AS endotrach_flag
 
@@ -300,7 +297,6 @@ SELECT
         LAG(ga.avg_gcs, 2) OVER (PARTITION BY ga.icustay_id ORDER BY ga.hour_offset),
         15  -- Normal GCS default
     ) AS avg_gcs_imputed,
-    
     -- Imputation flags
     CASE WHEN ga.min_gcs IS NULL THEN 1 ELSE 0 END AS gcs_imputed
     
@@ -314,13 +310,6 @@ CREATE INDEX idx_gcs_4bin_imp_gcs ON gcs_4bin_imputed(min_gcs_imputed);
 CREATE INDEX idx_gcs_4bin_imp_composite ON gcs_4bin_imputed(subject_id, hadm_id, icustay_id);
 
 -- Verification queries
-SELECT 
-    hour_offset,
-    COUNT(*) as total_bins,
-    COUNT(min_gcs) as bins_with_gcs,
-    AVG(min_gcs) as avg_min_gcs,
-    AVG(gcs_imputed) * 100 as pct_imputed
-FROM gcs_4bin_imputed
-WHERE hour_offset BETWEEN 0 AND 24  -- First 24 hours
-GROUP BY hour_offset
-ORDER BY hour_offset;
+SELECT * from gcs_4bin_imputed;
+
+
