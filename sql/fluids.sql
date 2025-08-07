@@ -164,27 +164,84 @@ SELECT
     icustay_id,
     starttime AS charttime,
     ROUND(CASE
-        WHEN amountuom = 'L' THEN amount * 1000.0
-        WHEN amountuom = 'ml' THEN amount
-        ELSE amount
+        WHEN amountuom = 'L' AND rateuom IS NULL THEN amount * 1000.0
+        WHEN amountuom = 'ml' AND rateuom IS NULL THEN amount
+        WHEN amountuom = 'cc' AND rateuom IS NULL THEN amount        -- cc = mL
+        WHEN amountuom = 'uL' AND rateuom IS NULL THEN amount / 1000.0
+        WHEN amountuom = 'ml/hr' THEN amount * (TIMESTAMPDIFF(MINUTE, starttime, endtime) / 60.0)
+        WHEN amountuom = 'ounces' THEN amount * 29.5735
+        -- Handle rate-based inputs (convert rate × duration to volume)
+        WHEN rateuom = 'mL/hour' AND rate IS NOT NULL THEN 
+            CASE 
+                WHEN endtime IS NOT NULL AND starttime IS NOT NULL THEN
+                    rate * (TIMESTAMPDIFF(MINUTE, starttime, endtime) / 60.0)
+                ELSE rate * 4.0  -- Assume 4-hour infusion if duration unknown
+            END
+        WHEN rateuom = 'mL/min' AND rate IS NOT NULL THEN 
+            CASE 
+                WHEN endtime IS NOT NULL AND starttime IS NOT NULL THEN
+                    rate * TIMESTAMPDIFF(MINUTE, starttime, endtime)
+                ELSE rate * 240.0  -- 4 hours = 240 minutes
+            END
+        WHEN rateuom = 'mL/kg/hour' AND rate IS NOT NULL AND patientweight IS NOT NULL THEN 
+            CASE 
+                WHEN endtime IS NOT NULL AND starttime IS NOT NULL THEN
+                    rate * patientweight * (TIMESTAMPDIFF(MINUTE, starttime, endtime) / 60.0)
+                ELSE rate * patientweight * 4.0  -- Assume 4-hour infusion
+            END
+        ELSE NULL
     END) AS other_amount
 FROM inputevents_mv
 WHERE itemid NOT IN (
-    -- Exclude already counted items
-    225158, 225828, 225944, 225797, 225159, 225823, 225825, 225827, 225941, 226089,  -- Crystalloids
-    220864, 220862, 225174, 225795, 225796,  -- Colloids
-    225168, 220970  -- Blood products
+  -- Exclude already counted items (crystalloids)
+    30015, 30018, 30020, 30021, 30058, 30060, 30061, 30063, 30065, 30159, 30160, 30169, 30190,
+    40850, 41491, 42639, 42187, 43819, 41430, 40712, 44160, 42383, 42297, 42453, 40872, 41915,
+    41490, 46501, 45045, 41984, 41371, 41582, 41322, 40778, 41896, 41428, 43936, 44200, 41619,
+    40424, 41457, 41581, 42844, 42429, 41356, 40532, 42548, 44184, 44521, 44741, 44126, 44110,
+    44633, 44983, 44815, 43986, 45079, 46781, 45155, 43909, 41467, 44367, 41743, 40423, 44263,
+    42749, 45480, 44491, 41695, 46169, 41580, 41392, 45989, 45137, 45154, 44053, 41416, 44761,
+    41237, 44426, 43975, 44894, 41380, 42671,
+    -- Exclude colloids
+    30008, 30009, 42832, 40548, 45403, 44203, 30181, 46564, 43237, 43353,
+    30012, 46313, 30011, 30016, 42975, 42944, 46336, 46729, 40033, 45410, 42731,
+    -- Exclude blood products
+    30179, 30001, 30004, 30005, 30180
 )
-AND amount IS NOT NULL
-AND amount > 0
-AND amount < 5000
 AND statusdescription != 'Rewritten'
+AND (
+    -- Include volume-based entries
+    (amount IS NOT NULL AND amount > 0 AND 
+     amountuom IN ('ml', 'cc', 'L', 'uL', 'ounces', 'ml/hr') AND
+     CASE 
+        WHEN amountuom = 'L' THEN amount < 5.0
+        WHEN amountuom IN ('ml', 'cc') THEN amount < 5000
+        WHEN amountuom = 'uL' THEN amount < 5000000
+        WHEN amountuom = 'ounces' THEN amount < 169
+        WHEN amountuom = 'ml/hr' THEN amount < 200
+        ELSE TRUE
+     END)
+    OR
+    -- Include fluid rate-based entries
+    (rate IS NOT NULL AND rate > 0 AND 
+     rateuom IN ('mL/hour', 'mL/min', 'mL/kg/hour') AND
+     CASE 
+        WHEN rateuom = 'mL/hour' THEN rate < 2000          -- Max 2000 mL/hr
+        WHEN rateuom = 'mL/min' THEN rate < 33.33          -- Max ~2000 mL/hr
+        WHEN rateuom = 'mL/kg/hour' THEN rate < 30         -- Max ~30 mL/kg/hr
+        ELSE TRUE
+     END)
+)
 UNION ALL
 -- CareVue other inputs
 SELECT
     icustay_id,
     charttime,
-    ROUND(amount) AS other_amount
+     ROUND(CASE
+        WHEN amountuom = 'L' THEN amount * 1000.0
+        WHEN amountuom = 'ml' THEN amount
+        WHEN amountuom = 'cc' THEN amount        -- cc = mL 
+        ELSE NULL
+    END) AS other_amount
 FROM inputevents_cv
 WHERE itemid NOT IN (
     -- Exclude already counted items (crystalloids)
@@ -203,8 +260,12 @@ WHERE itemid NOT IN (
 )
 AND amount IS NOT NULL
 AND amount > 0
-AND amount < 3000
-AND amountuom = 'ml';
+AND amountuom IN ('ml', 'cc', 'L', NULL)  -- Only fluid volume units
+AND CASE 
+    WHEN amountuom = 'L' THEN amount < 5.0
+    WHEN amountuom IN ('ml', 'cc') THEN amount < 5000
+    ELSE FALSE
+END
 
 CREATE INDEX idx_other_inputs_icustay ON other_inputs_4bin(icustay_id);
 CREATE INDEX idx_other_inputs_charttime ON other_inputs_4bin(charttime);
@@ -217,38 +278,7 @@ SELECT
     charttime,
     ROUND(value) AS output_amount
 FROM outputevents
-WHERE itemid IN (
-  40055, -- "Urine Out Foley"
-  43175, -- "Urine ."
-  40069, -- "Urine Out Void"
-  40094, -- "Urine Out Condom Cath"
-  40715, -- "Urine Out Suprapubic"
-  40473, -- "Urine Out IleoConduit"
-  40085, -- "Urine Out Incontinent"
-  40057, -- "Urine Out Rt Nephrostomy"
-  40056, -- "Urine Out Lt Nephrostomy"
-  40405, -- "Urine Out Other"
-  40428, -- "Urine Out Straight Cath"
-  40086,--	Urine Out Incontinent
-  40096, -- "Urine Out Ureteral Stent #1"
-  40651, -- "Urine Out Ureteral Stent #2"
-  -- these are the most frequently occurring urine output observations in MetaVision
-  226559, -- "Foley"
-  226560, -- "Void"
-  226561, -- "Condom Cath"
-  226584, -- "Ileoconduit"
-  226563, -- "Suprapubic"
-  226564, -- "R Nephrostomy"
-  226565, -- "L Nephrostomy"
-  226567, --	Straight Cath
-  226557, -- R Ureteral Stent
-  226558, -- L Ureteral Stent
-  227488, -- GU Irrigant Volume In
-  227489  -- GU Irrigant/Urine Volume Out
-)
-AND value IS NOT NULL
-AND value > 0
-AND value < 5000;  -- Filter extreme outliers
+WHERE value IS NOT NULL; 
 
 CREATE INDEX idx_all_outputs_icustay ON all_outputs_4bin(icustay_id);
 CREATE INDEX idx_all_outputs_charttime ON all_outputs_4bin(charttime);
@@ -364,3 +394,6 @@ CREATE INDEX idx_fluid_complete_agg_hour ON fluidBalance_complete_4bin_agg(hour_
 CREATE INDEX idx_fluid_complete_agg_composite ON fluidBalance_complete_4bin_agg(subject_id, hadm_id, icustay_id, hour_offset);
 
 select AVG(cumulative_balance),AVG(total_output_cumulative),AVG(total_input_cumulative),AVG(hourly_output_4hr) FROM `fluidBalance_complete_4bin_agg`;
+
+
+ select * from inputevents_mv where amountuom = 'ml/hr';
