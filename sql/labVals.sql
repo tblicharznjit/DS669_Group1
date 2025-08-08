@@ -529,3 +529,117 @@ CREATE INDEX idx_labs_imp_tcp ON labVals_4bin_imputed(thrombocytopenia);
 CREATE INDEX idx_labs_imp_coag ON labVals_4bin_imputed(coagulopathy);
 -- Verification queries
 SELECT * FROM `labVals_4bin_imputed`;
+
+
+
+
+
+-- Create 4-hour binned total bilirubin table
+DROP TABLE IF EXISTS bilirubin_4bin_total;
+CREATE TABLE bilirubin_4bin_total AS
+SELECT
+  tb.subject_id,
+  tb.hadm_id,
+  tb.icustay_id,
+  tb.hour_offset,
+  tb.bin_start_time,
+  tb.bin_end_time,
+  -- Total bilirubin sum for 4-hour bin
+  SUM(
+    CASE 
+      -- Filter extreme outlier
+      WHEN le.valuenum <= 0 THEN NULL   -- Remove negative/zero values
+      ELSE le.valuenum
+    END
+  ) AS total_bilirubin_4hr,
+  -- Count of measurements in bin
+  COUNT(
+    CASE 
+      WHEN le.valuenum > 0 THEN 1 
+      ELSE NULL 
+    END
+  ) AS bilirubin_count_4hr
+
+FROM 4hr_time_bins tb
+LEFT JOIN labevents le
+  ON tb.subject_id = le.subject_id
+  AND tb.hadm_id = le.hadm_id
+  AND le.charttime >= tb.bin_start_time
+  AND le.charttime < tb.bin_end_time
+  AND le.itemid IN (
+    50838,  -- Bilirubin, Total, Ascites
+    50883,  -- Bilirubin, Direct
+    50884,  -- Bilirubin, Indirect  
+    50885,  -- Bilirubin, Total (Blood) - main one
+    51012,  -- Bilirubin, Total, CSF
+    51028,  -- Bilirubin, Total, Body Fluid
+    51049,  -- Bilirubin, Total, Pleural
+    51464,  -- Bilirubin (Urine)
+    51465   -- Bilirubin Crystals (Urine)
+  )
+  AND le.valuenum IS NOT NULL
+
+GROUP BY tb.subject_id, tb.hadm_id, tb.icustay_id, tb.hour_offset, 
+         tb.bin_start_time, tb.bin_end_time
+ORDER BY tb.icustay_id, tb.hour_offset;
+
+-- imputed version
+DROP TABLE IF EXISTS bilirubin_4bin_imputed;
+CREATE TABLE bilirubin_4bin_imputed AS
+WITH patient_stats AS (
+  SELECT 
+    subject_id,
+    hadm_id,
+    icustay_id,
+    AVG(total_bilirubin_4hr) AS patient_mean_bilirubin
+  FROM bilirubin_4bin_total
+  WHERE total_bilirubin_4hr IS NOT NULL
+  GROUP BY subject_id, hadm_id, icustay_id
+),
+forward_filled AS (
+  SELECT 
+    bt.*,
+    LAG(total_bilirubin_4hr, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS prev_bilirubin,
+    LEAD(total_bilirubin_4hr, 1) OVER (PARTITION BY icustay_id ORDER BY hour_offset) AS next_bilirubin
+  FROM bilirubin_4bin_total bt
+)
+SELECT 
+  ff.subject_id,
+  ff.hadm_id,
+  ff.icustay_id,
+  ff.hour_offset,
+  ff.bin_start_time,
+  ff.bin_end_time,
+  -- Original total bilirubin
+  ff.total_bilirubin_4hr AS total_bilirubin_original,
+  -- Imputed total bilirubin
+  COALESCE(
+    ff.total_bilirubin_4hr,      -- Original value
+    ff.prev_bilirubin,           -- Forward fill
+    ff.next_bilirubin,           -- Backward fill  
+    ps.patient_mean_bilirubin,   -- Patient average
+    12.0                         -- Normal default (μmol/L)
+  ) AS total_bilirubin_imputed,
+  ff.bilirubin_count_4hr,
+  -- Imputation flag
+  CASE WHEN ff.total_bilirubin_4hr IS NULL THEN 1 ELSE 0 END AS bilirubin_imputed
+
+FROM forward_filled ff
+LEFT JOIN patient_stats ps
+  ON ff.subject_id = ps.subject_id
+  AND ff.hadm_id = ps.hadm_id
+  AND ff.icustay_id = ps.icustay_id
+ORDER BY ff.icustay_id, ff.hour_offset;
+
+-- Add indexes
+CREATE INDEX idx_bili_total_icustay ON bilirubin_4bin_total(icustay_id);
+CREATE INDEX idx_bili_total_hour ON bilirubin_4bin_total(hour_offset);
+CREATE INDEX idx_bili_imp_icustay ON bilirubin_4bin_imputed(icustay_id);
+CREATE INDEX idx_bili_imp_hour ON bilirubin_4bin_imputed(hour_offset);
+
+-- Verification
+SELECT 
+  AVG(`total_bilirubin_imputed`) 
+FROM bilirubin_4bin_imputed;
+
+SELECT * from bilirubin_4bin_imputed;

@@ -171,11 +171,11 @@ CREATE INDEX idx_vitals_4bin_composite ON vitals_4bin(subject_id, hadm_id, icust
 
 SELECT * FROM vitals_4bin;
 
--- Create imputed vitals table with multiple fallback strategies for all min/max/avg values
+-- imputed vitals table with multiple fallback strategies for all min/max/avg values
 DROP TABLE IF EXISTS vitals_4bin_imputed;
 CREATE TABLE vitals_4bin_imputed AS
 WITH vital_stats AS (
-    -- Calculate patient-level statistics for each vital (min, max, avg)
+    -- patient-level statistics for each vital (min, max, avg)
     SELECT 
         subject_id,
         hadm_id,

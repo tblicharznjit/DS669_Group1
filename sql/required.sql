@@ -542,7 +542,7 @@ WITH RECURSIVE time_sequence AS (
     UNION ALL
     SELECT hour_offset + 4
     FROM time_sequence
-    WHERE hour_offset < 56
+    WHERE hour_offset < 52
 )
 SELECT 
     c.subject_id,
@@ -558,6 +558,19 @@ ORDER BY c.icustay_id, ts.hour_offset;
 
 SELECT * FROM 4hr_time_bins;
 
+-- Count hour_offset bins per patient group
+SELECT 
+    subject_id,
+    hadm_id, 
+    icustay_id,
+    COUNT(hour_offset) as total_bins,
+    MIN(hour_offset) as min_hour_offset,
+    MAX(hour_offset) as max_hour_offset,
+    COUNT(DISTINCT hour_offset) as unique_hour_offsets
+FROM 4hr_time_bins
+GROUP BY subject_id, hadm_id, icustay_id
+ORDER BY subject_id, hadm_id, icustay_id;
+
 CREATE INDEX idx_time_bins_icustay ON 4hr_time_bins(icustay_id);
 CREATE INDEX idx_time_bins_times ON 4hr_time_bins(bin_start_time, bin_end_time);
 
@@ -565,6 +578,7 @@ CREATE INDEX idx_chartevents_composite ON chartevents(icustay_id, itemid, chartt
 CREATE INDEX idx_chartevents_composite1 ON chartevents(icustay_id, hadm_id, subject_id);
 CREATE INDEX idx_time_bins_composite ON 4hr_time_bins(icustay_id, hour_offset, bin_start_time, bin_end_time);
 
+DROP TABLE IF EXISTS `ceFiltered`;
 CREATE TABLE ceFiltered AS
 SELECT 
 sc.subject_id,
@@ -618,7 +632,7 @@ CREATE INDEX idx_ceFiltered_quality ON ceFiltered(icustay_id, itemid, valuenum, 
 CREATE INDEX idx_ceFiltered_onset_filter ON ceFiltered(subject_id, hadm_id, icustay_id, charttime);
 
 
-
+DROP TABLE IF EXISTS weight_4bin;
 -- weight
 CREATE TABLE weight_4bin AS
 SELECT 

@@ -125,7 +125,7 @@ ON sc.icustay_id = gf.icustay_id
 AND gf.IsMinGCS = 1
 ORDER BY sc.subject_id, sc.hadm_id, sc.icustay_id;
 
--- Add final indexes
+
 CREATE INDEX idx_gcs_1_subject ON gcs_1(subject_id);
 CREATE INDEX idx_gcs_1_hadm ON gcs_1(hadm_id);
 CREATE INDEX idx_gcs_1_icustay ON gcs_1(icustay_id);

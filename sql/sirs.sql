@@ -7,8 +7,8 @@ CREATE TABLE sirs_bg_component AS
 SELECT 
   bg.icustay_id,
   bg.hour_offset,
-  MIN(pco2_imputed) as paco2_min
-FROM bloodGasArterial_4bin_agg bg
+  MIN(pco2_min) as paco2_min
+FROM bloodGasArterial_4bin_agg_enhanced bg
 WHERE (specimen = 'ART' OR specimen_pred = 'ART')
 GROUP BY bg.icustay_id, bg.hour_offset;
 
@@ -114,11 +114,6 @@ CREATE INDEX idx_sirs_4bin_icustay ON sirs_4bin(icustay_id);
 CREATE INDEX idx_sirs_4bin_hour ON sirs_4bin(hour_offset);
 CREATE INDEX idx_sirs_4bin_sirs ON sirs_4bin(sirs);
 CREATE INDEX idx_sirs_4bin_composite ON sirs_4bin(subject_id, hadm_id, icustay_id, hour_offset);
-
--- Cleanup intermediate tables (optional)
--- DROP TABLE sirs_bg_component;
--- DROP TABLE sirs_score_components;
--- DROP TABLE sirs_score_calc;
 
 -- View final results
 SELECT AVG(sirs) FROM sirs_4bin;
