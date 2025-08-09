@@ -407,34 +407,13 @@ CREATE INDEX idx_vaso_mv_4bin_hour ON vasopressors_mv_4bin(hour_offset);
 DROP TABLE IF EXISTS pafi_intermediate_4bin;
 CREATE TABLE pafi_intermediate_4bin AS
 SELECT 
-  tb.subject_id,
-  tb.hadm_id,
-  tb.icustay_id,
-  tb.hour_offset,
-  tb.bin_start_time,
-  tb.bin_end_time,
-  bg.pao2fio2_imputed AS pao2fio2,
-  CASE WHEN vt.intubated = 1 OR vt.ventilator = 1 THEN 1 ELSE 0 END AS isvent
-FROM 4hr_time_bins tb
-LEFT JOIN bloodGasArterial_4bin_agg bg
-  ON tb.icustay_id = bg.icustay_id
-  AND tb.hour_offset = bg.hour_offset
-LEFT JOIN ventilation_4bin vt
-  ON tb.icustay_id = vt.icustay_id
-  AND tb.hour_offset = vt.hour_offset;
-
-
-
-DROP TABLE IF EXISTS pafi_intermediate_4bin;
-CREATE TABLE pafi_intermediate_4bin AS
-SELECT 
   bg.icustay_id,
   bg.bin_start_time,
   bg.bin_end_time,
   bg.hour_offset,
-  bg.pao2fio2_calculated_imputed,
+  bg.pao2fio2_avg,
   CASE WHEN vd.icustay_id IS NOT NULL THEN 1 ELSE 0 END AS isvent
-FROM bloodGasArterial_4bin_agg bg
+FROM bloodGasArterial_4bin_agg_enhanced bg
 LEFT JOIN ventilation_4bin vd
   ON bg.icustay_id = vd.icustay_id
   AND bg.bin_start_time = vd.bin_start_time 
@@ -445,8 +424,8 @@ CREATE TABLE pafi_final_4bin AS
 SELECT 
   icustay_id,
   hour_offset,
-  MIN(CASE WHEN isvent = 0 THEN pao2fio2_calculated_imputed ELSE NULL END) AS pao2fio2_novent_min,
-  MIN(CASE WHEN isvent = 1 THEN pao2fio2_calculated_imputed ELSE NULL END) AS pao2fio2_vent_min
+  MIN(CASE WHEN isvent = 0 THEN pao2fio2_avg ELSE NULL END) AS pao2fio2_novent_min,
+  MIN(CASE WHEN isvent = 1 THEN pao2fio2_avg ELSE NULL END) AS pao2fio2_vent_min
 FROM pafi_intermediate_4bin
 GROUP BY icustay_id, hour_offset;
 
@@ -597,6 +576,8 @@ SELECT
   mingcs,
   weight
 FROM sofa_components_4bin;
+
+select * from sofa_components_4bin;
 
 -- Add indexes
 CREATE INDEX idx_sofa_scores_4bin_icustay ON sofa_scores_4bin(icustay_id);

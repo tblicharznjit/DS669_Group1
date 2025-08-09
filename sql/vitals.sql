@@ -171,11 +171,11 @@ CREATE INDEX idx_vitals_4bin_composite ON vitals_4bin(subject_id, hadm_id, icust
 
 SELECT * FROM vitals_4bin;
 
--- Create imputed vitals table with multiple fallback strategies for all min/max/avg values
+-- imputed vitals table with multiple fallback strategies for all min/max/avg values
 DROP TABLE IF EXISTS vitals_4bin_imputed;
 CREATE TABLE vitals_4bin_imputed AS
 WITH vital_stats AS (
-    -- Calculate patient-level statistics for each vital (min, max, avg)
+    -- patient-level statistics for each vital (min, max, avg)
     SELECT 
         subject_id,
         hadm_id,
@@ -364,3 +364,52 @@ CREATE INDEX idx_vitals_imputed_composite ON vitals_4bin_imputed(subject_id, had
 SELECT AVG(heartrate), AVG(spo2), AVG(resprate), AVG(meanbp), AVG(diasbp), AVG(sysbp), AVG(tempc), AVG(glucose/18.0182) FROM vitals_4bin_imputed;
 
 SELECT * FROM vitals_4bin_imputed;
+
+
+ALTER TABLE vitals_4bin_imputed 
+ADD COLUMN shock_index DECIMAL(5,3),
+ADD COLUMN shock_index_min DECIMAL(5,3),
+ADD COLUMN shock_index_max DECIMAL(5,3);
+
+-- Calculate shock index (HR/SBP ratio)
+UPDATE vitals_4bin_imputed 
+SET 
+    shock_index = CASE 
+        WHEN sysbp > 30 THEN LEAST(heartrate / sysbp, 5.0)  -- Cap at 5.0 to prevent overflow
+        ELSE NULL 
+    END,
+    shock_index_min = CASE 
+        WHEN sysbp_max > 30 THEN LEAST(heartrate_min / sysbp_max, 5.0)
+        ELSE NULL 
+    END,
+    shock_index_max = CASE 
+        WHEN sysbp_min > 30 THEN LEAST(heartrate_max / sysbp_min, 5.0)
+        ELSE NULL 
+    END;
+
+SELECT AVG(shock_index) FROM vitals_4bin_imputed;
+
+
+
+ALTER TABLE vitals_4bin 
+ADD COLUMN shock_index DECIMAL(5,3),
+ADD COLUMN shock_index_min DECIMAL(5,3),
+ADD COLUMN shock_index_max DECIMAL(5,3);
+
+-- Calculate shock index (HR/SBP ratio)
+UPDATE vitals_4bin 
+SET 
+    shock_index = CASE 
+        WHEN sysbp > 30 THEN LEAST(heartrate / sysbp, 5.0)  -- Cap at 5.0 to prevent overflow
+        ELSE NULL 
+    END,
+    shock_index_min = CASE 
+        WHEN sysbp_max > 30 THEN LEAST(heartrate_min / sysbp_max, 5.0)
+        ELSE NULL 
+    END,
+    shock_index_max = CASE 
+        WHEN sysbp_min > 30 THEN LEAST(heartrate_max / sysbp_min, 5.0)
+        ELSE NULL 
+    END;
+
+SELECT AVG(shock_index) FROM vitals_4bin;

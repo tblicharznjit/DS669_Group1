@@ -125,7 +125,7 @@ ON sc.icustay_id = gf.icustay_id
 AND gf.IsMinGCS = 1
 ORDER BY sc.subject_id, sc.hadm_id, sc.icustay_id;
 
--- Add final indexes
+
 CREATE INDEX idx_gcs_1_subject ON gcs_1(subject_id);
 CREATE INDEX idx_gcs_1_hadm ON gcs_1(hadm_id);
 CREATE INDEX idx_gcs_1_icustay ON gcs_1(icustay_id);
@@ -190,6 +190,8 @@ GROUP BY tb.subject_id, tb.hadm_id, tb.icustay_id, tb.hour_offset,
 CREATE INDEX idx_gcs_4bin_base_icustay ON gcs_4bin_base(icustay_id);
 CREATE INDEX idx_gcs_4bin_base_hour ON gcs_4bin_base(hour_offset);
 CREATE INDEX idx_gcs_4bin_base_rn ON gcs_4bin_base(icustay_id, hour_offset, rn_within_bin);
+
+select * from gcs_4bin_base;
 
 -- Create GCS calculated values for each bin
 DROP TABLE IF EXISTS gcs_4bin_calculated;
