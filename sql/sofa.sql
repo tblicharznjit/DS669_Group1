@@ -631,3 +631,76 @@ CREATE INDEX idx_sofa_table_4bin_onset ON sofa_table_4bin(earliestOnset);
 
 SELECT AVG(`SOFA`) from sofa_table_4bin;
 
+
+DROP TABLE IF EXISTS vasopressors_cv_4bin;
+CREATE TABLE vasopressors_cv_4bin AS
+SELECT 
+    tb.icustay_id,
+    tb.hour_offset AS bin,
+    MAX(CASE
+        WHEN cv.itemid = 30047 THEN cv.rate / COALESCE(wt.weight, ec.weight)
+        WHEN cv.itemid = 30120 THEN cv.rate
+        ELSE NULL
+    END) AS rate_norepinephrine,
+    MAX(CASE
+        WHEN cv.itemid = 30044 THEN cv.rate / COALESCE(wt.weight, ec.weight)
+        WHEN cv.itemid IN (30119, 30309) THEN cv.rate
+        ELSE NULL
+    END) AS rate_epinephrine,
+    MAX(CASE WHEN cv.itemid IN (30043, 30307) THEN cv.rate END) AS rate_dopamine,
+    MAX(CASE WHEN cv.itemid IN (30042, 30306) THEN cv.rate END) AS rate_dobutamine
+FROM 4hr_time_bins tb
+JOIN icustays ie
+    ON tb.subject_id = ie.subject_id
+    AND tb.hadm_id = ie.hadm_id
+    AND tb.icustay_id = ie.icustay_id
+LEFT JOIN inputevents_cv cv
+    ON tb.icustay_id = cv.icustay_id
+    AND cv.charttime >= tb.bin_start_time
+    AND cv.charttime < tb.bin_end_time
+LEFT JOIN patient_weights_chart wt
+    ON tb.icustay_id = wt.icustay_id
+LEFT JOIN patient_weights_echo ec
+    ON tb.icustay_id = ec.icustay_id
+WHERE cv.itemid IN (30047, 30120, 30044, 30119, 30309, 30043, 30307, 30042, 30306)
+    AND cv.rate IS NOT NULL
+GROUP BY tb.icustay_id, tb.hour_offset;
+
+DROP TABLE IF EXISTS vasopressors_mv_4bin;
+CREATE TABLE vasopressors_mv_4bin AS
+SELECT 
+    tb.icustay_id,
+    tb.hour_offset AS bin,
+    MAX(CASE WHEN mv.itemid = 221906 THEN mv.rate END) AS rate_norepinephrine,
+    MAX(CASE WHEN mv.itemid = 221289 THEN mv.rate END) AS rate_epinephrine,
+    MAX(CASE WHEN mv.itemid = 221662 THEN mv.rate END) AS rate_dopamine,
+    MAX(CASE WHEN mv.itemid = 221653 THEN mv.rate END) AS rate_dobutamine
+FROM 4hr_time_bins tb
+JOIN icustays ie
+    ON tb.subject_id = ie.subject_id
+    AND tb.hadm_id = ie.hadm_id
+    AND tb.icustay_id = ie.icustay_id
+LEFT JOIN inputevents_mv mv
+    ON tb.icustay_id = mv.icustay_id
+    AND mv.starttime >= tb.bin_start_time
+    AND mv.starttime < tb.bin_end_time
+WHERE mv.itemid IN (221906, 221289, 221662, 221653)
+    AND mv.statusdescription != 'Rewritten'
+GROUP BY tb.icustay_id, tb.hour_offset;
+
+-- Combine vasopressor data
+DROP TABLE IF EXISTS vasopressors_4bin;
+CREATE TABLE vasopressors_4bin AS
+SELECT icustay_id, bin,
+       MAX(rate_norepinephrine) AS rate_norepinephrine,
+       MAX(rate_epinephrine) AS rate_epinephrine,
+       MAX(rate_dopamine) AS rate_dopamine,
+       MAX(rate_dobutamine) AS rate_dobutamine
+FROM (
+    SELECT icustay_id, bin, rate_norepinephrine, rate_epinephrine, rate_dopamine, rate_dobutamine
+    FROM vasopressors_cv_4bin
+    UNION ALL
+    SELECT icustay_id, bin, rate_norepinephrine, rate_epinephrine, rate_dopamine, rate_dobutamine
+    FROM vasopressors_mv_4bin
+) v
+GROUP BY icustay_id, bin;

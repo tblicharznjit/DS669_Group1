@@ -1,0 +1,1 @@
+select * from vasopressors_4bin;
