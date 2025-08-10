@@ -5,3 +5,6 @@ finalData.csv
 finalData2.csv
 requiredFile.pkl
 vaso.csv
+test_data.pkl
+train_data.pkl
+val_data.pkl
