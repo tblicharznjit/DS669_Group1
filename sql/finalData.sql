@@ -69,3 +69,105 @@ LEFT JOIN `gcs_4bin_imputed` gcs ON gcs.subject_id = b.subject_id AND gcs.hadm_i
 
 
 select * from final_dataset;
+
+select count(DISTINCT icustay_id) from final_dataset;
+
+SELECT COUNT(DISTINCT(subject_id)) FROM final_dataset;
+
+SELECT COUNT(DISTINCT(subject_id)) FROM final_dataset WHERE `Gender`=1;
+
+SELECT COUNT(DISTINCT(subject_id)) FROM final_dataset WHERE `Death`=1;
+
+SELECT 
+    -- Patient Demographics (averages and std dev)
+    AVG(Age) as avg_age,
+    STDDEV(Age) as std_age,
+    AVG(Weight) as avg_weight,
+    STDDEV(Weight) as std_weight,
+    -- Blood Gas Parameters
+    AVG(PH) as avg_ph,
+    STDDEV(PH) as std_ph,
+    AVG(PaO2) as avg_pao2,
+    STDDEV(PaO2) as std_pao2,
+    AVG(PaCO2) as avg_paco2,
+    STDDEV(PaCO2) as std_paco2,
+    AVG(`PaO2/FiO2`) as avg_pao2_fio2,
+    STDDEV(`PaO2/FiO2`) as std_pao2_fio2,
+    AVG(ArterialBE) as avg_arterial_be,
+    STDDEV(ArterialBE) as std_arterial_be,
+    AVG(HCO3) as avg_hco3,
+    STDDEV(HCO3) as std_hco3,
+    AVG(FiO2) as avg_fio2,
+    STDDEV(FiO2) as std_fio2,
+    AVG(HGB) as avg_hemoglobin,
+    STDDEV(HGB) as std_hemoglobin,
+    AVG(Chloride) as avg_chloride,
+    STDDEV(Chloride) as std_chloride,
+    AVG(Calcium) as avg_calcium,
+    STDDEV(Calcium) as std_calcium,
+    AVG(Magnesium) as avg_magnesium,
+    STDDEV(Magnesium) as std_magnesium,
+    AVG(SGPT) as avg_sgpt,
+    STDDEV(SGPT) as std_sgpt,
+    AVG(SGOT) as avg_sgot,
+    STDDEV(SGOT) as std_sgot,
+    -- Vital Signs
+    AVG(Temperature) as avg_temperature,
+    STDDEV(Temperature) as std_temperature,
+    AVG(HR) as avg_heart_rate,
+    STDDEV(HR) as std_heart_rate,
+    AVG(RR) as avg_resp_rate,
+    STDDEV(RR) as std_resp_rate,
+    AVG(SBP) as avg_systolic_bp,
+    STDDEV(SBP) as std_systolic_bp,
+    AVG(DBP) as avg_diastolic_bp,
+    STDDEV(DBP) as std_diastolic_bp,
+    AVG(MBP) as avg_mean_bp,
+    STDDEV(MBP) as std_mean_bp,
+    AVG(ShockIndex) as avg_shock_index,
+    STDDEV(ShockIndex) as std_shock_index,
+    AVG(SpO2) as avg_spo2,
+    STDDEV(SpO2) as std_spo2,
+    -- Lab Values
+    AVG(AL) as avg_lactate,
+    STDDEV(AL) as std_lactate,
+    AVG(BUN) as avg_bun,
+    STDDEV(BUN) as std_bun,
+    AVG(Creatinine) as avg_creatinine,
+    STDDEV(Creatinine) as std_creatinine,
+    AVG(Platelet) as avg_platelet,
+    STDDEV(Platelet) as std_platelet,
+    AVG(WBC) as avg_wbc,
+    STDDEV(WBC) as std_wbc,
+    AVG(Potassium) as avg_potassium,
+    STDDEV(Potassium) as std_potassium,
+    AVG(Sodium) as avg_sodium,
+    STDDEV(Sodium) as std_sodium,
+    AVG(Glucose) as avg_glucose,
+    STDDEV(Glucose) as std_glucose,
+    AVG(PTT) as avg_ptt,
+    STDDEV(PTT) as std_ptt,
+    AVG(PT) as avg_pt,
+    STDDEV(PT) as std_pt,
+    AVG(INR) as avg_inr,
+    STDDEV(INR) as std_inr,
+    AVG(TB) as avg_total_bilirubin,
+    STDDEV(TB) as std_total_bilirubin,
+    -- Fluid Balance
+    AVG(CB) as avg_cumulative_balance,
+    STDDEV(CB) as std_cumulative_balance,
+    AVG(TotalInput) as avg_total_input,
+    STDDEV(TotalInput) as std_total_input,
+    AVG(TotalOutput) as avg_total_output,
+    STDDEV(TotalOutput) as std_total_output,
+    AVG(`4hourlyOutput`) as avg_4hourly_output,
+    STDDEV(`4hourlyOutput`) as std_4hourly_output,
+    -- Scores
+    AVG(SOFA) as avg_sofa,
+    STDDEV(SOFA) as std_sofa,
+    AVG(SIRS) as avg_sirs,
+    STDDEV(SIRS) as std_sirs,
+    AVG(GCS) as avg_gcs,
+    STDDEV(GCS) as std_gcs
+    
+FROM final_dataset;
