@@ -4,8 +4,8 @@ import pickle
 from ID3QNE_deepQnet import Dist_DQN
 
 # ====== CONFIG ======
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-epochs = 5  # adjust for longer training
+device = 'mps' if torch.mps.is_available() else 'cpu'
+epochs = 100  # adjust for longer training
 
 # ====== Load Real Patient Data ======
 with open('requiredFile.pkl', 'rb') as f:
