@@ -650,10 +650,6 @@ SELECT
     MAX(CASE WHEN cv.itemid IN (30043, 30307) THEN cv.rate END) AS rate_dopamine,
     MAX(CASE WHEN cv.itemid IN (30042, 30306) THEN cv.rate END) AS rate_dobutamine
 FROM 4hr_time_bins tb
-JOIN icustays ie
-    ON tb.subject_id = ie.subject_id
-    AND tb.hadm_id = ie.hadm_id
-    AND tb.icustay_id = ie.icustay_id
 LEFT JOIN inputevents_cv cv
     ON tb.icustay_id = cv.icustay_id
     AND cv.charttime >= tb.bin_start_time
@@ -665,6 +661,8 @@ LEFT JOIN patient_weights_echo ec
 WHERE cv.itemid IN (30047, 30120, 30044, 30119, 30309, 30043, 30307, 30042, 30306)
     AND cv.rate IS NOT NULL
 GROUP BY tb.icustay_id, tb.hour_offset;
+
+SELECT * FROM vasopressors_cv_4bin;
 
 DROP TABLE IF EXISTS vasopressors_mv_4bin;
 CREATE TABLE vasopressors_mv_4bin AS
@@ -704,3 +702,5 @@ FROM (
     FROM vasopressors_mv_4bin
 ) v
 GROUP BY icustay_id, bin;
+
+select * from vasopressors_4bin;
