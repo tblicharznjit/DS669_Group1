@@ -2,3 +2,5 @@ databasePath.py
 __pycache__
 venv311
 finalData.csv
+finalData2.csv
+requiredFile.pkl

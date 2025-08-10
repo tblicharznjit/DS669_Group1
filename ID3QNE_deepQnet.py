@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import copy
 
 # gamma = 0.9
-device = 'cpu'
+device = 'mps'
 
 
 class DistributionalDQN(nn.Module):
